@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS amg_suppliers (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
 );
 
+-- Create indexes for suppliers
+CREATE INDEX IF NOT EXISTS idx_suppliers_name ON amg_suppliers(name);
+CREATE INDEX IF NOT EXISTS idx_suppliers_email ON amg_suppliers(email);
+
 -- Create categories table
 CREATE TABLE IF NOT EXISTS amg_categories (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -342,4 +346,170 @@ ON storage.objects FOR DELETE
 TO authenticated
 USING (bucket_id = 'products');
 
+-- Create supplier orders table
+CREATE TABLE IF NOT EXISTS amg_supplier_orders (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    supplier_id UUID REFERENCES amg_suppliers(id) NOT NULL,
+    order_number VARCHAR NOT NULL UNIQUE,
+    order_date TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL,
+    expected_delivery_date TIMESTAMP WITH TIME ZONE,
+    delivery_date TIMESTAMP WITH TIME ZONE,
+    status VARCHAR NOT NULL CHECK (status IN ('draft', 'pending', 'confirmed', 'shipped', 'delivered', 'cancelled', 'partially_delivered')),
+    total_amount DECIMAL(10,2) DEFAULT 0,
+    shipping_cost DECIMAL(10,2) DEFAULT 0,
+    tax_amount DECIMAL(10,2) DEFAULT 0,
+    notes TEXT,
+    payment_terms TEXT,
+    payment_status VARCHAR CHECK (payment_status IN ('unpaid', 'partially_paid', 'paid')),
+    payment_due_date TIMESTAMP WITH TIME ZONE,
+    currency VARCHAR(3) DEFAULT 'EUR',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL,
+    created_by UUID,
+    updated_by UUID,
+    documents JSONB DEFAULT '[]'::jsonb
+);
+
+-- Create supplier order items table
+CREATE TABLE IF NOT EXISTS amg_supplier_order_items (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    order_id UUID REFERENCES amg_supplier_orders(id) ON DELETE CASCADE NOT NULL,
+    product_id UUID REFERENCES amg_products(id) NOT NULL,
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    unit_price DECIMAL(10,2) NOT NULL,
+    total_price DECIMAL(10,2) GENERATED ALWAYS AS (quantity * unit_price) STORED,
+    expected_delivery_date TIMESTAMP WITH TIME ZONE,
+    received_quantity INTEGER DEFAULT 0 CHECK (received_quantity >= 0),
+    status VARCHAR CHECK (status IN ('pending', 'partially_received', 'received', 'cancelled')),
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
+);
+
+-- Create supplier order history table
+CREATE TABLE IF NOT EXISTS amg_supplier_order_history (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    order_id UUID REFERENCES amg_supplier_orders(id) ON DELETE CASCADE NOT NULL,
+    status VARCHAR NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL,
+    created_by UUID
+);
+
+-- Create indexes
+CREATE INDEX IF NOT EXISTS idx_supplier_orders_supplier ON amg_supplier_orders(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_orders_status ON amg_supplier_orders(status);
+CREATE INDEX IF NOT EXISTS idx_supplier_orders_date ON amg_supplier_orders(order_date);
+CREATE INDEX IF NOT EXISTS idx_supplier_order_items_order ON amg_supplier_order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_order_items_product ON amg_supplier_order_items(product_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_order_history_order ON amg_supplier_order_history(order_id);
+
+-- Drop existing triggers if they exist
+DROP TRIGGER IF EXISTS update_supplier_order_total_trigger ON amg_supplier_order_items;
+DROP TRIGGER IF EXISTS update_supplier_order_status_trigger ON amg_supplier_order_items;
+DROP TRIGGER IF EXISTS log_supplier_order_status_change_trigger ON amg_supplier_orders;
+
+-- Create or replace the functions
+CREATE OR REPLACE FUNCTION update_supplier_order_total()
+RETURNS TRIGGER AS $$
+BEGIN
+    WITH order_total AS (
+        SELECT 
+            order_id,
+            COALESCE(SUM(quantity * unit_price), 0) as subtotal
+        FROM amg_supplier_order_items
+        WHERE order_id = COALESCE(NEW.order_id, OLD.order_id)
+        GROUP BY order_id
+    )
+    UPDATE amg_supplier_orders
+    SET total_amount = order_total.subtotal + COALESCE(shipping_cost, 0) + COALESCE(tax_amount, 0)
+    FROM order_total
+    WHERE amg_supplier_orders.id = order_total.order_id;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION update_supplier_order_status()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Calculate total items and received items
+    WITH order_stats AS (
+        SELECT 
+            COUNT(*) as total_items,
+            COUNT(*) FILTER (WHERE status = 'received') as received_items,
+            COUNT(*) FILTER (WHERE status = 'partially_received') as partial_items
+        FROM amg_supplier_order_items
+        WHERE order_id = NEW.order_id
+    )
+    UPDATE amg_supplier_orders
+    SET status = CASE
+        WHEN EXISTS (SELECT 1 FROM amg_supplier_order_items WHERE order_id = NEW.order_id AND status = 'cancelled') THEN 'cancelled'
+        WHEN (SELECT received_items = total_items FROM order_stats) THEN 'delivered'
+        WHEN (SELECT partial_items > 0 OR received_items > 0 FROM order_stats) THEN 'partially_delivered'
+        ELSE status
+    END
+    WHERE id = NEW.order_id;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION log_supplier_order_status_change()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.status IS NULL OR NEW.status != OLD.status THEN
+        INSERT INTO amg_supplier_order_history (order_id, status, notes, created_by)
+        VALUES (NEW.id, NEW.status, 'Status changed to: ' || NEW.status, NEW.updated_by);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create the triggers
+CREATE TRIGGER update_supplier_order_total_trigger
+    AFTER INSERT OR UPDATE OR DELETE ON amg_supplier_order_items
+    FOR EACH ROW
+    EXECUTE FUNCTION update_supplier_order_total();
+
+CREATE TRIGGER update_supplier_order_status_trigger
+    AFTER INSERT OR UPDATE ON amg_supplier_order_items
+    FOR EACH ROW
+    EXECUTE FUNCTION update_supplier_order_status();
+
+CREATE TRIGGER log_supplier_order_status_change_trigger
+    AFTER UPDATE OF status ON amg_supplier_orders
+    FOR EACH ROW
+    WHEN (OLD.status IS DISTINCT FROM NEW.status)
+    EXECUTE FUNCTION log_supplier_order_status_change();
+
+-- Create transaction management functions
+CREATE OR REPLACE FUNCTION begin_transaction()
+RETURNS void AS $$
+BEGIN
+    -- Nothing to do, transaction is already started
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION commit_transaction()
+RETURNS void AS $$
+BEGIN
+    COMMIT;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION rollback_transaction()
+RETURNS void AS $$
+BEGIN
+    ROLLBACK;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 COMMIT;
+
+-- Insert test data
+INSERT INTO amg_suppliers (name, contact, address, email, phone)
+VALUES 
+    ('Bijoux & Co', 'Jean Dupont', '123 Rue des Artisans, Paris', 'contact@bijoux-co.fr', '+33123456789'),
+    ('Pierres Précieuses SARL', 'Marie Martin', '456 Avenue des Gemmes, Lyon', 'info@pierres-precieuses.fr', '+33234567890'),
+    ('Or & Argent', 'Pierre Durand', '789 Boulevard des Métaux, Marseille', 'contact@or-argent.fr', '+33345678901')
+ON CONFLICT (id) DO NOTHING;

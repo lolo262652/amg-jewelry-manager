@@ -8,6 +8,8 @@ import Suppliers from './pages/suppliers/Suppliers'
 import Categories from './pages/categories/Categories'
 import Products from './pages/products/Products'
 import Settings from './pages/Settings'
+import Clients from './pages/clients/Clients'
+import SupplierOrders from './pages/supplier-orders/SupplierOrders'
 
 const PrivateRoute = ({ children }) => {
   const { user } = useAuth()
@@ -32,6 +34,8 @@ const AppRoutes = ({ toggleColorMode }) => {
         <Route path="suppliers" element={<Suppliers />} />
         <Route path="categories" element={<Categories />} />
         <Route path="products" element={<Products />} />
+        <Route path="clients" element={<Clients />} />
+        <Route path="supplier-orders" element={<SupplierOrders />} />
         <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>

@@ -26,6 +26,8 @@ import {
   Brightness4 as Brightness4Icon,
   Logout as LogoutIcon,
   Business as BusinessIcon,
+  Inventory2 as Inventory2Icon,
+  LocalShipping as LocalShippingIcon,
 } from '@mui/icons-material'
 import { useAuth } from '../../context/AuthContext'
 
@@ -62,8 +64,9 @@ const menuItems = [
   { text: 'Tableau de bord', icon: <DashboardIcon />, path: '/' },
   { text: 'Fournisseurs', icon: <BusinessIcon />, path: '/suppliers' },
   { text: 'Catégories', icon: <CategoryIcon />, path: '/categories' },
-  { text: 'Produits', icon: <DiamondIcon />, path: '/products' },
+  { text: 'Produits', icon: <Inventory2Icon />, path: '/products' },
   { text: 'Clients', icon: <PeopleIcon />, path: '/clients' },
+  { text: 'Commandes Fournisseurs', icon: <LocalShippingIcon />, path: '/supplier-orders' },
   { text: 'Paramètres', icon: <SettingsIcon />, path: '/settings' },
 ]
 
