@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Outlet, useNavigate } from 'react-router-dom'
+import { Outlet, useNavigate, Link as RouterLink } from 'react-router-dom'
 import { styled } from '@mui/material/styles'
 import {
   Box,
@@ -25,6 +25,7 @@ import {
   Settings as SettingsIcon,
   Brightness4 as Brightness4Icon,
   Logout as LogoutIcon,
+  Business as BusinessIcon,
 } from '@mui/icons-material'
 import { useAuth } from '../../context/AuthContext'
 
@@ -59,9 +60,10 @@ const DrawerHeader = styled('div')(({ theme }) => ({
 
 const menuItems = [
   { text: 'Tableau de bord', icon: <DashboardIcon />, path: '/' },
-  { text: 'Fournisseurs', icon: <PeopleIcon />, path: '/suppliers' },
+  { text: 'Fournisseurs', icon: <BusinessIcon />, path: '/suppliers' },
   { text: 'Catégories', icon: <CategoryIcon />, path: '/categories' },
   { text: 'Produits', icon: <DiamondIcon />, path: '/products' },
+  { text: 'Clients', icon: <PeopleIcon />, path: '/clients' },
   { text: 'Paramètres', icon: <SettingsIcon />, path: '/settings' },
 ]
 
@@ -126,7 +128,7 @@ export default function Layout({ toggleColorMode }) {
         <List>
           {menuItems.map((item) => (
             <ListItem key={item.text} disablePadding>
-              <ListItemButton onClick={() => navigate(item.path)}>
+              <ListItemButton component={RouterLink} to={item.path}>
                 <ListItemIcon>{item.icon}</ListItemIcon>
                 <ListItemText primary={item.text} />
               </ListItemButton>
